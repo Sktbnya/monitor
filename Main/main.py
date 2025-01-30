@@ -9,10 +9,10 @@ import time
 from mss import mss
 
 # Укажите путь к Tesseract OCR (обязательно!)
-pytesseract.pytesseract.tesseract_cmd = r'./tesseract/tesseract.exe'
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 class ScreenMonitorApp:
-    def init(self):
+    def __init__(self):
         self.window = tk.Tk()
         self.window.title("SOC L1 Monitor")
 
@@ -131,6 +131,6 @@ class ScreenMonitorApp:
         except Exception as e:
             print(f"Ошибка отправки: {e}")
 
-if __name__ == "main":
+if __name__ == "__main__":
     app = ScreenMonitorApp()
     app.window.mainloop()
