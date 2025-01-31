@@ -10,7 +10,7 @@ a = Analysis(
         ('tesseract/', 'tesseract'),
         ('tesseract/tessdata/eng.traineddata', 'tesseract/tessdata')
     ],
-    hiddenimports=[],
+    hiddenimports=['win32timezone'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
