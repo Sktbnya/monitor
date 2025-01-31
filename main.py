@@ -12,6 +12,24 @@ import time
 from mss import mss
 import re
 import configparser
+import pyautogui
+
+def prevent_sleep():
+    while True:
+        # Получаем текущие координаты курсора
+        x, y = pyautogui.position()
+        
+        # Сдвигаем курсор на 1 пиксель вправо и обратно
+        pyautogui.moveTo(x + 1, y, duration=0.1)
+        pyautogui.moveTo(x, y, duration=0.1)
+        
+        # Ждем 60 секунд перед следующим движением
+        time.sleep(60)
+
+# Запуск функции в отдельном потоке
+def start_sleep_prevention():
+    sleep_thread = threading.Thread(target=prevent_sleep, daemon=True)
+    sleep_thread.start()
 
 # Определяем путь к Tesseract внутри EXE
 def get_tesseract_path():
@@ -192,16 +210,22 @@ class ScreenMonitorApp:
             self.config['Telegram']['chat_id'] = self.chat_id_entry.get()
             self.save_config()
 
+            # Запуск мониторинга
             self.monitoring = True
             self.monitor_btn.config(text="Стоп")
             self.status_label.config(text="Статус: Активен", foreground="green")
+            
+            # Запуск потока для предотвращения спящего режима
+            start_sleep_prevention()
+            
+            # Запуск мониторинга
             self.thread = threading.Thread(target=self.monitor_loop, daemon=True)
             self.thread.start()
         else:
             self.monitoring = False
             self.monitor_btn.config(text="Старт")
             self.status_label.config(text="Статус: Остановлен", foreground="gray")
-
+            
     def monitor_loop(self):
         prev_values = {'24h': None, '1h': None}
         
