@@ -3,9 +3,9 @@ import os
 import platform
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance
 import requests
 import threading
 import time
@@ -14,26 +14,34 @@ import re
 import configparser
 import pyautogui
 
-def prevent_sleep():
-    while True:
-        # Получаем текущие координаты курсора
-        x, y = pyautogui.position()
-        
-        # Сдвигаем курсор на 1 пиксель вправо и обратно
-        pyautogui.moveTo(x + 1, y, duration=0.1)
-        pyautogui.moveTo(x, y, duration=0.1)
-        
-        # Ждем 60 секунд перед следующим движением
-        time.sleep(60)
+# Настройки для MPSIEM
+MPSIEM_FONT_SETTINGS = {
+    'contrast_factor': 2.5,       # Увеличение контраста для цифр
+    'sharpness_factor': 2.0,      # Увеличение резкости
+    'threshold': 200,             # Порог бинаризации
+    'digit_whitelist': '0123456789',
+    'resize_factor': 2            # Увеличение размера изображения для лучшего распознавания
+}
 
-# Запуск функции в отдельном потоке
+def prevent_sleep():
+    """Усиленные движения мыши для предотвращения сна системы"""
+    while True:
+        try:
+            x, y = pyautogui.position()
+            # Увеличенная амплитуда движения
+            pyautogui.moveTo(x + 50, y + 50, duration=0.3)
+            pyautogui.moveTo(x - 50, y - 50, duration=0.3)
+            pyautogui.moveTo(x, y, duration=0.3)
+            time.sleep(30)  # Уменьшенный интервал
+        except Exception as e:
+            print(f"Ошибка в prevent_sleep: {str(e)}")
+            time.sleep(60)
+
 def start_sleep_prevention():
     sleep_thread = threading.Thread(target=prevent_sleep, daemon=True)
     sleep_thread.start()
 
-# Определяем путь к Tesseract внутри EXE
 def get_tesseract_path():
-    """Определяем путь к Tesseract внутри EXE"""
     if getattr(sys, 'frozen', False):
         base_dir = Path(sys._MEIPASS)
     else:
@@ -41,7 +49,6 @@ def get_tesseract_path():
     
     tess_dir = base_dir / 'tesseract'
     
-    # Для разных ОС
     if platform.system() == "Windows":
         exe_path = tess_dir / 'tesseract.exe'
     elif platform.system() == "Linux":
@@ -55,7 +62,6 @@ def get_tesseract_path():
     os.environ['TESSDATA_PREFIX'] = str(tess_dir / 'tessdata')
     return str(exe_path)
 
-# Устанавливаем путь до импорта pytesseract
 pytesseract.pytesseract.tesseract_cmd = get_tesseract_path()
 
 class AreaSelector:
@@ -68,9 +74,7 @@ class AreaSelector:
         
         self.canvas = tk.Canvas(self.root, cursor="cross")
         self.canvas.pack(fill=tk.BOTH, expand=True)
-
-        self.start_x = None
-        self.start_y = None
+        self.start_x = self.start_y = None
         self.rect = None
         
         self.canvas.bind("<ButtonPress-1>", self.on_press)
@@ -78,39 +82,25 @@ class AreaSelector:
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
         
     def on_press(self, event):
-        self.start_x = event.x
-        self.start_y = event.y
+        self.start_x, self.start_y = event.x, event.y
         self.rect = self.canvas.create_rectangle(
-            self.start_x, self.start_y, 
-            self.start_x, self.start_y,
+            self.start_x, self.start_y, self.start_x, self.start_y,
             outline='red', width=2
         )
         
     def on_drag(self, event):
-        self.canvas.coords(
-            self.rect,
-            self.start_x, self.start_y,
-            event.x, event.y
-        )
+        self.canvas.coords(self.rect, self.start_x, self.start_y, event.x, event.y)
         
     def on_release(self, event):
-        x1 = min(self.start_x, event.x)
-        y1 = min(self.start_y, event.y)
-        x2 = max(self.start_x, event.x)
-        y2 = max(self.start_y, event.y)
-        
+        x1, y1 = min(self.start_x, event.x), min(self.start_y, event.y)
+        x2, y2 = max(self.start_x, event.x), max(self.start_y, event.y)
         self.root.destroy()
-        self.callback({
-            'left': x1,
-            'top': y1,
-            'width': x2 - x1,
-            'height': y2 - y1
-        })
+        self.callback({'left': x1, 'top': y1, 'width': x2-x1, 'height': y2-y1})
 
 class ScreenMonitorApp:
     def __init__(self):
         self.window = tk.Tk()
-        self.window.title("SOC L1 Monitor")
+        self.window.title("SOC L1 Monitor v2.0")
         self.window.protocol("WM_DELETE_WINDOW", self.on_close)
         
         self.config = configparser.ConfigParser()
@@ -120,37 +110,33 @@ class ScreenMonitorApp:
         self.setup_ui()
         self.monitoring = False
         self.thread = None
-        self.coords_24h = None
-        self.coords_1h = None
-        self.tesseract_config = '--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789'
+        self.coords_24h = self.coords_1h = None
+        
+        # Оптимизированный конфиг для MPSIEM
+        self.tesseract_config = (
+            '--psm 11 --oem 3 '
+            '-c tessedit_char_whitelist=0123456789 '
+            'load_system_dawg=0 load_freq_dawg=0 '
+            'textord_min_linesize=2.5 textord_old_xheight=1'
+        )
 
     def load_config(self):
         if os.path.exists(self.config_file):
             self.config.read(self.config_file)
-        else:
-            self.config['Settings'] = {}
-            self.config['Telegram'] = {}
-            self.config['Tesseract'] = {}
 
     def save_config(self):
         with open(self.config_file, 'w') as configfile:
             self.config.write(configfile)
 
     def setup_ui(self):
-        # UI элементы
         ttk.Label(self.window, text="Telegram Bot Token:").grid(row=0, column=0, padx=5, pady=2)
         self.token_entry = ttk.Entry(self.window, width=40)
         self.token_entry.grid(row=0, column=1, padx=5, pady=2)
-        if 'Telegram' in self.config and 'token' in self.config['Telegram']:
-            self.token_entry.insert(0, self.config['Telegram']['token'])
-
+        
         ttk.Label(self.window, text="Chat ID:").grid(row=1, column=0, padx=5, pady=2)
         self.chat_id_entry = ttk.Entry(self.window, width=40)
         self.chat_id_entry.grid(row=1, column=1, padx=5, pady=2)
-        if 'Telegram' in self.config and 'chat_id' in self.config['Telegram']:
-            self.chat_id_entry.insert(0, self.config['Telegram']['chat_id'])
-
-        # Кнопки выбора областей
+        
         self.btn_24h = ttk.Button(self.window, text="Выбрать область 24ч", 
                                 command=lambda: self.select_area("24h"))
         self.btn_24h.grid(row=2, column=0, padx=5, pady=2)
@@ -163,12 +149,10 @@ class ScreenMonitorApp:
         self.label_1h = ttk.Label(self.window, text="Не выбрано")
         self.label_1h.grid(row=3, column=1, padx=5, pady=2)
 
-        # Управление мониторингом
         self.monitor_btn = ttk.Button(self.window, text="Старт", 
                                     command=self.toggle_monitoring, width=15)
         self.monitor_btn.grid(row=4, columnspan=2, pady=10)
         
-        # Статус
         self.status_label = ttk.Label(self.window, text="Статус: Остановлен", foreground="gray")
         self.status_label.grid(row=5, columnspan=2)
 
@@ -192,7 +176,6 @@ class ScreenMonitorApp:
 
     def toggle_monitoring(self):
         if not self.monitoring:
-            # Валидация данных
             if not re.match(r"^\d+:[A-Za-z0-9_-]+$", self.token_entry.get()):
                 messagebox.showerror("Ошибка", "Неверный формат токена Telegram!")
                 return
@@ -205,20 +188,16 @@ class ScreenMonitorApp:
                 messagebox.showerror("Ошибка", "Выберите обе области для мониторинга!")
                 return
 
-            # Сохранение настроек
-            self.config['Telegram']['token'] = self.token_entry.get()
-            self.config['Telegram']['chat_id'] = self.chat_id_entry.get()
+            self.config['Telegram'] = {
+                'token': self.token_entry.get(),
+                'chat_id': self.chat_id_entry.get()
+            }
             self.save_config()
 
-            # Запуск мониторинга
             self.monitoring = True
             self.monitor_btn.config(text="Стоп")
             self.status_label.config(text="Статус: Активен", foreground="green")
-            
-            # Запуск потока для предотвращения спящего режима
             start_sleep_prevention()
-            
-            # Запуск мониторинга
             self.thread = threading.Thread(target=self.monitor_loop, daemon=True)
             self.thread.start()
         else:
@@ -226,6 +205,23 @@ class ScreenMonitorApp:
             self.monitor_btn.config(text="Старт")
             self.status_label.config(text="Статус: Остановлен", foreground="gray")
             
+    def preprocess_image(self, img):
+        """Оптимизация изображения для MPSIEM"""
+        img = Image.frombytes("RGB", img.size, img.rgb)
+        
+        # Увеличение размера
+        img = img.resize((img.width * MPSIEM_FONT_SETTINGS['resize_factor'], 
+                        img.height * MPSIEM_FONT_SETTINGS['resize_factor']))
+        
+        # Улучшение контраста и резкости
+        img = img.convert('L')
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(MPSIEM_FONT_SETTINGS['contrast_factor'])
+        
+        # Бинаризация
+        img = img.point(lambda x: 0 if x < MPSIEM_FONT_SETTINGS['threshold'] else 255)
+        return img
+
     def monitor_loop(self):
         prev_values = {'24h': None, '1h': None}
         
@@ -234,45 +230,41 @@ class ScreenMonitorApp:
                 try:
                     for area_type in ['24h', '1h']:
                         coords = getattr(self, f'coords_{area_type}')
-                        if not coords:
-                            continue
-                            
+                        if not coords: continue
+                        
                         img = sct.grab(coords)
+                        processed_img = self.preprocess_image(img)
+                        
                         text = pytesseract.image_to_string(
-                            Image.frombytes("RGB", img.size, img.rgb),
+                            processed_img,
                             config=self.tesseract_config
                         ).strip()
-                        text = ''.join(filter(str.isdigit, text))
                         
-                        if text and text != prev_values[area_type]:
+                        # Фильтрация результатов
+                        text = ''.join(filter(str.isdigit, text))
+                        if text != prev_values[area_type]:
                             if prev_values[area_type] is not None:
                                 self.send_alert(f"{area_type} incidents changed: {prev_values[area_type]} → {text}")
                             prev_values[area_type] = text
 
-                    for _ in range(10):
-                        if not self.monitoring:
-                            break
-                        time.sleep(1)
+                    time.sleep(10)
 
                 except Exception as e:
                     self.window.after(0, messagebox.showerror,
-                                    "Ошибка мониторинга", 
-                                    f"{str(e)}\nПроверьте настройки областей!")
+                                    "Ошибка мониторинга", str(e))
                     break
 
     def send_alert(self, message):
-        url = f"https://api.telegram.org/bot{self.token_entry.get()}/sendMessage"
-        params = {
-            "chat_id": self.chat_id_entry.get(),
-            "text": message
-        }
         try:
-            response = requests.post(url, params=params, timeout=10)
+            response = requests.post(
+                f"https://api.telegram.org/bot{self.config['Telegram']['token']}/sendMessage",
+                params={'chat_id': self.config['Telegram']['chat_id'], 'text': message},
+                timeout=15
+            )
             response.raise_for_status()
         except Exception as e:
             self.window.after(0, messagebox.showerror,
-                            "Ошибка отправки",
-                            f"Не удалось отправить сообщение: {str(e)}")
+                            "Ошибка отправки", str(e))
 
     def on_close(self):
         self.monitoring = False
@@ -285,4 +277,4 @@ if __name__ == "__main__":
         app = ScreenMonitorApp()
         app.window.mainloop()
     except Exception as e:
-        messagebox.showerror("Критическая ошибка", f"Программа завершена с ошибкой: {str(e)}")
+        messagebox.showerror("Критическая ошибка", f"Ошибка запуска: {str(e)}")
