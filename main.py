@@ -246,10 +246,10 @@ class ScreenMonitorApp:
             while self.monitoring:
                 actions = [
                     lambda: pyautogui.moveRel(random.randint(-50, 50), random.randint(-50, 50)),
-                    lambda: pyautogui.click(button='middle'),
-                    lambda: pyautogui.scroll(random.randint(-5, 5)),
+                    #lambda: pyautogui.click(button='middle'),
+                    #lambda: pyautogui.scroll(random.randint(-5, 5)),
                     lambda: pyautogui.hotkey('ctrl', 'shift'),
-                    lambda: pyautogui.press('volumemute'),
+                    #lambda: pyautogui.press('volumemute'),
                     lambda: win32api.keybd_event(0x5B, 0, 0, 0)  # Win key
                 ]
                 
